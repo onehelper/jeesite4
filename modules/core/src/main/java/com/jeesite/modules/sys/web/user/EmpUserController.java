@@ -9,21 +9,32 @@ import java.util.Map;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.shiro.authz.annotation.Logical;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.multipart.MultipartFile;
 
+import com.jeesite.common.codec.EncodeUtils;
 import com.jeesite.common.collect.ListUtils;
 import com.jeesite.common.collect.MapUtils;
 import com.jeesite.common.config.Global;
 import com.jeesite.common.entity.Page;
+import com.jeesite.common.lang.DateUtils;
 import com.jeesite.common.lang.StringUtils;
+import com.jeesite.common.mapper.JsonMapper;
+import com.jeesite.common.shiro.realm.AuthorizingRealm;
+import com.jeesite.common.utils.excel.ExcelExport;
+import com.jeesite.common.utils.excel.annotation.ExcelField.Type;
 import com.jeesite.common.web.BaseController;
 import com.jeesite.modules.sys.entity.EmpUser;
 import com.jeesite.modules.sys.entity.Employee;
@@ -37,6 +48,7 @@ import com.jeesite.modules.sys.service.PostService;
 import com.jeesite.modules.sys.service.RoleService;
 import com.jeesite.modules.sys.service.UserService;
 import com.jeesite.modules.sys.utils.EmpUtils;
+import com.jeesite.modules.sys.utils.UserUtils;
 
 /**
  * 员工用户Controller
@@ -45,6 +57,7 @@ import com.jeesite.modules.sys.utils.EmpUtils;
  */
 @Controller
 @RequestMapping(value = "${adminPath}/sys/empUser")
+@ConditionalOnProperty(name="web.core.enabled", havingValue="true", matchIfMissing=true)
 public class EmpUserController extends BaseController {
 
 	@Autowired
@@ -81,13 +94,14 @@ public class EmpUserController extends BaseController {
 	@RequiresPermissions("user")
 	@RequestMapping(value = "listData")
 	@ResponseBody
-	public Page<EmpUser> listData(EmpUser empUser, Boolean isAll, HttpServletRequest request, HttpServletResponse response) {
+	public Page<EmpUser> listData(EmpUser empUser, Boolean isAll, String ctrlPermi, HttpServletRequest request, HttpServletResponse response) {
 		empUser.getEmployee().getOffice().setIsQueryChildren(true);
 		empUser.getEmployee().getCompany().setIsQueryChildren(true);
-		if (!(isAll != null && isAll)){
-			empUserService.addDataScopeFilter(empUser, UserDataScope.CTRL_PERMI_MANAGE);
+		if (!(isAll != null && isAll) || Global.isStrictMode()){
+			empUserService.addDataScopeFilter(empUser, ctrlPermi);
 		}
-		Page<EmpUser> page = empUserService.findPage(new Page<EmpUser>(request, response), empUser);
+		empUser.setPage(new Page<>(request, response));
+		Page<EmpUser> page = empUserService.findPage(empUser);
 		return page;
 	}
 
@@ -111,9 +125,11 @@ public class EmpUserController extends BaseController {
 		Post post = new Post();
 		model.addAttribute("postList", postService.findList(post));
 		
-		// 获取当前用户所拥有的岗位
 		if (StringUtils.isNotBlank(employee.getEmpCode())){
+			// 获取当前用户所拥有的岗位
 			employee.setEmployeePostList(employeeService.findEmployeePostList(employee));
+			// 获取当前员工关联的附属机构信息
+			employee.setEmployeeOfficeList(employeeService.findEmployeeOfficeList(employee));
 		}
 		
 		// 获取当前编辑用户的角色和权限
@@ -131,109 +147,117 @@ public class EmpUserController extends BaseController {
 		return "modules/sys/user/empUserForm";
 	}
 
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions(value={"sys:empUser:edit","sys:empUser:authRole"}, logical=Logical.OR)
 	@PostMapping(value = "save")
 	@ResponseBody
-	public String save(@Validated EmpUser empUser, String oldLoginCode, String op, HttpServletRequest request) {
+	public String save(@Validated EmpUser empUser, String op, HttpServletRequest request) {
 		if (User.isSuperAdmin(empUser.getUserCode())) {
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
 		if (!EmpUser.USER_TYPE_EMPLOYEE.equals(empUser.getUserType())){
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
-		if (!Global.TRUE.equals(userService.checkLoginCode(oldLoginCode, empUser.getLoginCode()/*, null*/))) {
-			return renderResult(Global.FALSE, "保存用户'" + empUser.getLoginCode() + "'失败，登录账号已存在");
+		EmpUser old = super.getWebDataBinderSource(request);
+		if (!Global.TRUE.equals(userService.checkLoginCode(old != null ? old.getLoginCode() : "", empUser.getLoginCode()))) {
+			return renderResult(Global.FALSE, text("保存用户失败，登录账号''{0}''已存在", empUser.getLoginCode()));
 		}
-		if (StringUtils.inString(op, Global.OP_ADD, Global.OP_EDIT)){
-			empUser.setUserType(User.USER_TYPE_EMPLOYEE);
-			empUser.setMgrType(User.MGR_TYPE_NOT_ADMIN);
+		if (StringUtils.isBlank(empUser.getEmployee().getEmpNo())){
+			empUser.getEmployee().setEmpNo(empUser.getLoginCode());
+		}
+		if (!Global.TRUE.equals(checkEmpNo(old != null ? old.getEmployee().getEmpNo() : "", empUser.getEmployee().getEmpNo()))) {
+			return renderResult(Global.FALSE, text("保存用户失败，员工工号''{0}''已存在", empUser.getEmployee().getEmpNo()));
+		}
+		if (StringUtils.inString(op, Global.OP_ADD, Global.OP_EDIT)
+				&& UserUtils.getSubject().isPermitted("sys:empUser:edit")){
 			empUserService.save(empUser);
 		}
-		if (StringUtils.inString(op, Global.OP_ADD, Global.OP_AUTH)){
+		if (StringUtils.inString(op, Global.OP_ADD, Global.OP_AUTH)
+				&& UserUtils.getSubject().isPermitted("sys:empUser:authRole")){
 			userService.saveAuth(empUser);
 		}
-		return renderResult(Global.TRUE, "保存用户'" + empUser.getUserName() + "'成功");
+		return renderResult(Global.TRUE, text("保存用户''{0}''成功", empUser.getUserName()));
+	}
+	
+	/**
+	 * 验证工号是否有效
+	 * @param oldName
+	 * @param name
+	 * @return
+	 */
+	@RequiresPermissions("user")
+	@RequestMapping(value = "checkEmpNo")
+	@ResponseBody
+	public String checkEmpNo(String oldEmpNo, @RequestParam("employee.empNo") String empNo) {
+		Employee employee = new Employee();
+		employee.setEmpNo(empNo);
+		if (empNo != null && empNo.equals(oldEmpNo)) {
+			return Global.TRUE;
+		} else if (empNo != null && employeeService.getByEmpNo(employee) == null) {
+			return Global.TRUE;
+		}
+		return Global.FALSE;
 	}
 
-//	/**
-//	 * 导出用户数据
-//	 */
-//	@RequiresPermissions("sys:empUser:view")
-//	@RequestMapping(value = "export", method = RequestMethod.POST)
-//	public void exportFile(EmpUser empUser, HttpServletResponse response) {
-//		List<EmpUser> list = empUserService.findList(empUser);
-//		String fileName = "用户数据" + DateUtils.getDate("yyyyMMddHHmmss") + ".xlsx";
-//		new ExcelExport("用户数据", EmpUser.class).setDataList(list).write(response, fileName).dispose();
-//	}
-//
-//	/**
-//	 * 导入用户数据
-//	 */
-//	@ResponseBody
-//	@RequiresPermissions("sys:empUser:edit")
-//	@RequestMapping(value = "import", method = RequestMethod.POST)
-//	public String importFile(MultipartFile file) {
-//		try {
-//			int successNum = 0;
-//			int failureNum = 0;
-//			StringBuilder failureMsg = new StringBuilder();
-//			ExcelImport ei = new ExcelImport(file, 1, 0);
-//			List<EmpUser> list = ei.getDataList(EmpUser.class);
-//			for (EmpUser user : list) {
-//				try {
-//					if (ObjectUtils.toBoolean(userService.checkLoginCode("", user.getUserCode(), null))){
-//						ValidatorUtils.validateWithException(user);
-//						empUserService.save(user);
-//						successNum++;
-//					} else {
-//						failureMsg.append("<br/>登录账号 " + user.getUserCode() + " 已存在; ");
-//						failureNum++;
-//					}
-//				} catch (ConstraintViolationException ex) {
-//					failureMsg.append("<br/>登录账号 " + user.getUserCode() + " 导入失败：");
-//					List<String> messageList = ValidatorUtils.extractPropertyAndMessageAsList(ex, ": ");
-//					for (String message : messageList) {
-//						failureMsg.append(message + "; ");
-//						failureNum++;
-//					}
-//				} catch (Exception ex) {
-//					failureMsg.append("<br/>登录名 " + user.getUserCode() + " 导入失败：" + ex.getMessage());
-//				}
-//			}
-//			if (failureNum > 0) {
-//				failureMsg.insert(0, "，失败 " + failureNum + " 条用户，导入信息如下：");
-//			}
-//			return renderResult(Global.TRUE, "已成功导入 " + successNum + " 条用户" + failureMsg);
-//		} catch (Exception ex) {
-//			return renderResult(Global.FALSE, "导入用户失败！失败信息：" + ex.getMessage());
-//		}
-//	}
-//
-//	/**
-//	 * 下载导入用户数据模板
-//	 */
-//	@RequiresPermissions("sys:empUser:view")
-//	@RequestMapping(value = "import/template")
-//	public String importFileTemplate(HttpServletRequest request, HttpServletResponse response) {
-//		try {
-//			String fileName = "用户数据导入模板.xlsx";
-//			List<User> list = ListUtils.newArrayList();
-//			list.add(UserUtils.getUser());
-//			new ExcelExport("用户数据", User.class, Type.IMPORT).setDataList(list)
-//					.write(response, fileName).dispose();
-//		} catch (Exception e) {
-//			request.setAttribute("message", "导入模板下载失败！失败信息：" + e.getMessage());
-//			request.getRequestDispatcher("/error/404").forward(request, response);
-//		}
-//		return null;
-//	}
+	/**
+	 * 导出用户数据
+	 */
+	@RequiresPermissions("sys:empUser:view")
+	@RequestMapping(value = "exportData")
+	public void exportData(EmpUser empUser, Boolean isAll, String ctrlPermi, HttpServletResponse response) {
+		empUser.getEmployee().getOffice().setIsQueryChildren(true);
+		empUser.getEmployee().getCompany().setIsQueryChildren(true);
+		if (!(isAll != null && isAll) || Global.isStrictMode()){
+			empUserService.addDataScopeFilter(empUser, ctrlPermi);
+		}
+		List<EmpUser> list = empUserService.findList(empUser);
+		String fileName = "用户数据" + DateUtils.getDate("yyyyMMddHHmmss") + ".xlsx";
+		try(ExcelExport ee = new ExcelExport("用户数据", EmpUser.class)){
+			ee.setDataList(list).write(response, fileName);
+		}
+	}
+
+	/**
+	 * 下载导入用户数据模板
+	 */
+	@RequiresPermissions("sys:empUser:view")
+	@RequestMapping(value = "importTemplate")
+	public void importTemplate(HttpServletResponse response) {
+		EmpUser empUser = new EmpUser();
+		User user = UserUtils.getUser();
+		if (User.USER_TYPE_EMPLOYEE.equals(user.getUserType())){
+			empUser = empUserService.get(user.getUserCode());
+		}else{
+			BeanUtils.copyProperties(user, empUser);
+		}
+		List<EmpUser> list = ListUtils.newArrayList(empUser);
+		String fileName = "用户数据模板.xlsx";
+		try(ExcelExport ee = new ExcelExport("用户数据", EmpUser.class, Type.IMPORT)){
+			ee.setDataList(list).write(response, fileName);
+		}
+	}
+
+	/**
+	 * 导入用户数据
+	 */
+	@ResponseBody
+	@RequiresPermissions("sys:empUser:edit")
+	@PostMapping(value = "importData")
+	public String importData(MultipartFile file, String updateSupport) {
+		try {
+			boolean isUpdateSupport = Global.YES.equals(updateSupport);
+			String message = empUserService.importData(file, isUpdateSupport);
+			return renderResult(Global.TRUE, "posfull:"+message);
+		} catch (Exception ex) {
+			return renderResult(Global.FALSE, "posfull:"+ex.getMessage());
+		}
+	}
 	
 	/**
 	 * 停用用户
 	 * @param empUser
 	 * @return
 	 */
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions("sys:empUser:updateStatus")
 	@ResponseBody
 	@RequestMapping(value = "disable")
 	public String disable(EmpUser empUser) {
@@ -244,11 +268,11 @@ public class EmpUserController extends BaseController {
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
 		if (empUser.getCurrentUser().getUserCode().equals(empUser.getUserCode())) {
-			return renderResult(Global.FALSE, "停用用户失败, 不允许停用当前用户");
+			return renderResult(Global.FALSE, text("停用用户失败，不允许停用当前用户"));
 		}
 		empUser.setStatus(User.STATUS_DISABLE);
 		userService.updateStatus(empUser);
-		return renderResult(Global.TRUE, "停用用户成功");
+		return renderResult(Global.TRUE, text("停用用户''{0}''成功", empUser.getUserName()));
 	}
 	
 	/**
@@ -256,7 +280,7 @@ public class EmpUserController extends BaseController {
 	 * @param empUser
 	 * @return
 	 */
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions("sys:empUser:updateStatus")
 	@ResponseBody
 	@RequestMapping(value = "enable")
 	public String enable(EmpUser empUser) {
@@ -268,7 +292,8 @@ public class EmpUserController extends BaseController {
 		}
 		empUser.setStatus(User.STATUS_NORMAL);
 		userService.updateStatus(empUser);
-		return renderResult(Global.TRUE, "启用用户成功");
+		AuthorizingRealm.isValidCodeLogin(empUser.getLoginCode(), empUser.getCorpCode_(), null, "success");
+		return renderResult(Global.TRUE, text("启用用户''{0}''成功", empUser.getUserName()));
 	}
 	
 	/**
@@ -276,7 +301,7 @@ public class EmpUserController extends BaseController {
 	 * @param empUser
 	 * @return
 	 */
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions("sys:empUser:resetpwd")
 	@RequestMapping(value = "resetpwd")
 	@ResponseBody
 	public String resetpwd(EmpUser empUser) {
@@ -287,7 +312,8 @@ public class EmpUserController extends BaseController {
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
 		userService.updatePassword(empUser.getUserCode(), null);
-		return renderResult(Global.TRUE, "重置用户密码成功");
+		AuthorizingRealm.isValidCodeLogin(empUser.getLoginCode(), empUser.getCorpCode_(), null, "success");
+		return renderResult(Global.TRUE, text("重置用户''{0}''密码成功", empUser.getUserName()));
 	}
 
 	/**
@@ -306,16 +332,16 @@ public class EmpUserController extends BaseController {
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
 		if (empUser.getCurrentUser().getUserCode().equals(empUser.getUserCode())) {
-			return renderResult(Global.FALSE, "删除用户失败, 不允许删除当前用户");
+			return renderResult(Global.FALSE, text("删除用户失败，不允许删除当前用户"));
 		}
 		empUserService.delete(empUser);
-		return renderResult(Global.TRUE, "删除用户'" + empUser.getUserName() + "'成功！");
+		return renderResult(Global.TRUE, text("删除用户'{0}'成功", empUser.getUserName()));
 	}
 	
 	/** 
 	 * 用户授权数据权限
 	 */
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions("sys:empUser:authDataScope")
 	@RequestMapping(value = "formAuthDataScope")
 	public String formAuthDataScope(EmpUser empUser, Model model, HttpServletRequest request) {
 		UserDataScope userDataScope = new UserDataScope();
@@ -330,7 +356,7 @@ public class EmpUserController extends BaseController {
 	/** 
 	 * 保存用户授权数据权限
 	 */
-	@RequiresPermissions("sys:empUser:edit")
+	@RequiresPermissions("sys:empUser:authDataScope")
 	@RequestMapping(value = "saveAuthDataScope")
 	@ResponseBody
 	public String saveAuthDataScope(EmpUser empUser, HttpServletRequest request) {
@@ -340,8 +366,9 @@ public class EmpUserController extends BaseController {
 		if (!EmpUser.USER_TYPE_EMPLOYEE.equals(empUser.getUserType())){
 			return renderResult(Global.FALSE, "非法操作，不能够操作此用户！");
 		}
+		empUser.setMgrType(User.MGR_TYPE_NOT_ADMIN);
 		userService.saveAuthDataScope(empUser);
-		return renderResult(Global.TRUE, "角色授权数据权限成功");
+		return renderResult(Global.TRUE, text("用户分配数据权限成功"));
 	}
 
 	/**
@@ -360,8 +387,8 @@ public class EmpUserController extends BaseController {
 	@RequestMapping(value = "treeData")
 	@ResponseBody
 	public List<Map<String, Object>> treeData(String idPrefix, String pId,
-			String officeCode, String companyCode, String postCode,
-			String roleCode, Boolean isAll, String isShowCode) {
+			String officeCode, String companyCode, String postCode, String roleCode, 
+			Boolean isAll, String isShowCode, String ctrlPermi) {
 		List<Map<String, Object>> mapList = ListUtils.newArrayList();
 		EmpUser empUser = new EmpUser();
 		Employee employee = empUser.getEmployee();
@@ -373,13 +400,12 @@ public class EmpUserController extends BaseController {
 		empUser.setRoleCode(roleCode);
 		empUser.setStatus(User.STATUS_NORMAL);
 		empUser.setUserType(User.USER_TYPE_EMPLOYEE);
-		empUser.setMgrType(User.MGR_TYPE_NOT_ADMIN);
-		if (!(isAll != null && isAll)) {
-			empUserService.addDataScopeFilter(empUser);
+		if (!(isAll != null && isAll) || Global.isStrictMode()) {
+			empUserService.addDataScopeFilter(empUser, ctrlPermi);
 		}
-		List<User> list = userService.findList(empUser);
+		List<EmpUser> list = empUserService.findList(empUser);
 		for (int i = 0; i < list.size(); i++) {
-			User e = list.get(i);
+			EmpUser e = list.get(i);
 			Map<String, Object> map = MapUtils.newHashMap();
 			map.put("id", StringUtils.defaultIfBlank(idPrefix, "u_") + e.getId());
 			map.put("pId", StringUtils.defaultIfBlank(pId, "0"));
@@ -387,6 +413,20 @@ public class EmpUserController extends BaseController {
 			mapList.add(map);
 		}
 		return mapList;
+	}
+	
+	/**
+	 * 选择员工对话框
+	 */
+	@RequiresPermissions("user")
+	@RequestMapping(value = "empUserSelect")
+	public String empUserSelect(EmpUser empUser, String selectData, Model model) {
+		String selectDataJson = EncodeUtils.decodeUrl(selectData);
+		if (JsonMapper.fromJson(selectDataJson, Map.class) != null){
+			model.addAttribute("selectData", selectDataJson);
+		}
+		model.addAttribute("empUser", empUser);
+		return "modules/sys/user/empUserSelect";
 	}
 	
 }

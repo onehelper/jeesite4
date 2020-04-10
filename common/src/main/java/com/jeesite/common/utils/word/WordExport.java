@@ -214,15 +214,22 @@ public class WordExport {
 		FileOutputStream fos = null;
 		try {
 			fos = new FileOutputStream(newFile);
+			this.document.write(fos);
 		} catch (FileNotFoundException e) {
 			e.printStackTrace();
-		}
-		try {
-			this.document.write(fos);
-			fos.flush();
-			fos.close();
 		} catch (IOException e) {
 			e.printStackTrace();
+		} finally {
+			try {
+				if (fos != null){
+					fos.flush();
+				}
+				if (fos != null){
+					fos.close();
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
 		}
 	}
 

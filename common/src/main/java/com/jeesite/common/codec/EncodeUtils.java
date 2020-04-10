@@ -8,15 +8,18 @@ package com.jeesite.common.codec;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.lang3.StringEscapeUtils;
+import org.apache.commons.text.StringEscapeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.jeesite.common.collect.ListUtils;
 import com.jeesite.common.lang.ExceptionUtils;
 import com.jeesite.common.lang.StringUtils;
 
@@ -64,6 +67,9 @@ public class EncodeUtils {
 	 * Base64编码.
 	 */
 	public static String encodeBase64(String input) {
+		if (StringUtils.isBlank(input)){
+			return StringUtils.EMPTY;
+		}
 		try {
 			return new String(Base64.encodeBase64(input.getBytes(DEFAULT_URL_ENCODING)));
 		} catch (UnsupportedEncodingException e) {
@@ -89,10 +95,13 @@ public class EncodeUtils {
 	 * Base64解码.
 	 */
 	public static String decodeBase64String(String input) {
+		if (StringUtils.isBlank(input)){
+			return StringUtils.EMPTY;
+		}
 		try {
 			return new String(Base64.decodeBase64(input.getBytes()), DEFAULT_URL_ENCODING);
 		} catch (UnsupportedEncodingException e) {
-			return "";
+			return StringUtils.EMPTY;
 		}
 	}
 
@@ -167,7 +176,9 @@ public class EncodeUtils {
 	 * URL 解码, Encode默认为UTF-8. 
 	 */
 	public static String decodeUrl(String part, String encoding) {
-
+		if (part == null){
+			return null;
+		}
 		try {
 			return URLDecoder.decode(part, encoding);
 		} catch (UnsupportedEncodingException e) {
@@ -181,30 +192,29 @@ public class EncodeUtils {
 	public static String decodeUrl2(String part) {
 		return decodeUrl(decodeUrl(part));
 	}
-	
+
 	// 预编译XSS过滤正则表达式
-	private static Pattern p1 = Pattern.compile("<\\s*(script|link|style|iframe)(.|\\n)*<\\s*\\/\\s*\\1\\s*>\\s*", Pattern.CASE_INSENSITIVE);
-	private static Pattern p2 = Pattern.compile("\\s*on[a-z]+\\s*=\\s*(\"[^\"]+\"|'[^']+'|[^\\s]+)\\s*(?=>)", Pattern.CASE_INSENSITIVE);
-	private static Pattern p3 = Pattern.compile("\\s*(href|src)\\s*=\\s*(\"\\s*(javascript|vbscript):[^\"]+\"|'\\s*(javascript|vbscript):[^']+'|(javascript|vbscript):[^\\s]+)\\s*(?=>)", Pattern.CASE_INSENSITIVE);
-	private static Pattern p4 = Pattern.compile("epression\\((.|\\n)*\\);?", Pattern.CASE_INSENSITIVE);
+	private static List<Pattern> xssPatterns = ListUtils.newArrayList(
+			Pattern.compile("(<\\s*(script|link|style|iframe)([\\s\\S]*?)(>|<\\/\\s*\\1\\s*>))|(</\\s*(script|link|style|iframe)\\s*>)", Pattern.CASE_INSENSITIVE),
+			Pattern.compile("\\s*(href|src)\\s*=\\s*(\"\\s*(javascript|vbscript):[^\"]+\"|'\\s*(javascript|vbscript):[^']+'|(javascript|vbscript):[^\\s]+)\\s*(?=>)", Pattern.CASE_INSENSITIVE),
+			Pattern.compile("\\s*on[a-z]+\\s*=\\s*(\"[^\"]+\"|'[^']+'|[^\\s]+)\\s*(?=>)", Pattern.CASE_INSENSITIVE),
+			Pattern.compile("(eval\\((.*?)\\)|xpression\\((.*?)\\))", Pattern.CASE_INSENSITIVE)
+		);
 	
 	/**
-	 * XSS 非法字符过滤
-	 * 内容以<!--HTML-->开头的用以下规则（保留标签，去掉js脚本）：
-	 * 	1、<(script|link|style|iframe)(.|\n)*<\/\1>\s* 
-	 * 	2、\s*on[a-z]+\s*=\s*("[^"]+"|'[^']+'|[^\s]+)\s*(?=>) 
-	 * 	3、\s*(href|src)\s*=\s*("\s*(javascript|vbscript):[^"]+"|'\s*(javascript|vbscript):[^']+'|(javascript|vbscript):[^\s]+)\s*(?=>) 
-	 * 	4、epression\((.|\n)*\);? 
-	 * 其它情况下：进行HTML4编码
+	 * XSS 非法字符过滤，内容以<!--HTML-->开头的用以下规则（保留标签）
 	 * @author ThinkGem
 	 */
 	public static String xssFilter(String text) {
+		String oriValue = StringUtils.trim(text);
 		if (text != null){
-			String oriValue = StringUtils.trim(text), value = oriValue;
-			value = p1.matcher(value).replaceAll("");
-			value = p2.matcher(value).replaceAll("");
-			value = p3.matcher(value).replaceAll("");
-			value = p4.matcher(value).replaceAll("");
+			String value = oriValue;
+			for (Pattern pattern : xssPatterns) {
+				Matcher matcher = pattern.matcher(value);
+				if (matcher.find()) {
+					value = matcher.replaceAll(StringUtils.EMPTY);
+				}
+			}
 			// 如果开始不是HTML，XML，JOSN格式，则再进行HTML的 "、<、> 转码。
 			if (!StringUtils.startsWithIgnoreCase(value, "<!--HTML-->") 	// HTML
 					&& !StringUtils.startsWithIgnoreCase(value, "<?xml ") 	// XML
@@ -212,10 +222,37 @@ public class EncodeUtils {
 					&& !(StringUtils.startsWith(value, "{") && StringUtils.endsWith(value, "}")) // JSON Object
 					&& !(StringUtils.startsWith(value, "[") && StringUtils.endsWith(value, "]")) // JSON Array
 				){
-				value = value.replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+				StringBuilder sb = new StringBuilder();
+				for (int i = 0; i < value.length(); i++) {
+					char c = value.charAt(i);
+					switch (c) {
+					case '>':
+						sb.append("＞");
+						break;
+					case '<':
+						sb.append("＜");
+						break;
+					case '\'':
+						sb.append("＇");
+						break;
+					case '\"':
+						sb.append("＂");
+						break;
+//					case '&':
+//						sb.append("＆");
+//						break;
+//					case '#':
+//						sb.append("＃");
+//						break;
+					default:
+						sb.append(c);
+						break;
+					}
+				}
+				value = sb.toString();
 			}
 			if (logger.isInfoEnabled() && !value.equals(oriValue)){
-				logger.info("xssFilter: {} to {}", text, value);
+				logger.info("xssFilter: {}   <=<=<=   {}", value, text);
 			}
 			return value;
 		}
@@ -223,21 +260,59 @@ public class EncodeUtils {
 	}
 	
 	// 预编译SQL过滤正则表达式
-	private static Pattern p5 = Pattern.compile("(?:')|(?:--)|(/\\*(?:.|[\\n\\r])*?\\*/)|(\\b(select|update|and|or|delete|insert|trancate|char|into|substr|ascii|declare|exec|count|master|into|drop|execute)\\b)", Pattern.CASE_INSENSITIVE);
-			
+	private static Pattern sqlPattern = Pattern.compile("(?:')|(?:--)|(/\\*(?:.|[\\n\\r])*?\\*/)|(\\b(select|update|and|or|delete|insert|trancate|char|into|substr|ascii|declare|exec|count|master|into|drop|execute|case when)\\b)", Pattern.CASE_INSENSITIVE);
+	
 	/**
 	 * SQL过滤，防止注入，传入参数输入有select相关代码，替换空。
 	 * @author ThinkGem
 	 */
 	public static String sqlFilter(String text){
 		if (text != null){
-			String value = p5.matcher(text).replaceAll("");
+			String value = text;
+			Matcher matcher = sqlPattern.matcher(value);
+			if (matcher.find()) {
+				value = matcher.replaceAll(StringUtils.EMPTY);
+			}
 			if (logger.isWarnEnabled() && !value.equals(text)){
-				logger.warn("sqlFilter: {} to {}", text, value);
+				logger.info("sqlFilter: {}   <=<=<=   {}", value, text);
 				return StringUtils.EMPTY;
 			}
 			return value;
 		}
 		return null;
 	}
+	
+//	public static void main(String[] args) {
+//		int i = 0;
+//		xssFilter((++i)+"你好，<script>alert(document.cookie)</script>我还在。");
+//		xssFilter((++i)+"你好，<strong>加粗文字</strong>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，\"><strong>加粗文字</strong>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<iframe src=\"abcdef\"></iframe><strong>加粗文字</strong>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<iframe src=\"abcdef\"/><strong>加粗文字</strong>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<iframe src=\"abcdef\"><strong>加粗文字</strong>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script type=\"text/javascript\">alert(document.cookie)</script>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script\n type=\"text/javascript\">\nalert(document.cookie)\n</script>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script src='' onerror='alert(document.cookie)'></script>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script type=text/javascript>alert()我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script>alert(document.cookie)</script>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<script>window.location='url'我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，</script></iframe>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，eval(abc)我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，xpression(abc)我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<img src='abc.jpg' onerror='location='';alert(document.cookie);'></img>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<img src='abc.jpg' onerror='alert(document.cookie);'/>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<img src='abc.jpg' onerror='alert(document.cookie);'>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<a onload='alert(\"abc\")'>hello</a>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<a href=\"/abc\">hello</a>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<a href='/abc'>hello</a>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<a href='vbscript:alert(\"abc\");'>hello</a>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，<a href='javascript:alert(\"abc\");'>hello</a>我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，?abc=def&hello=123&world={\"a\":1}我还在。");
+//		xssFilter("<!--HTML-->"+(++i)+"你好，?abc=def&hello=123&world={'a':1}我还在。");
+//		sqlFilter((++i)+"你好，select * from xxx where abc=def and 1=1我还在。");
+//		sqlFilter((++i)+"你好，insert into xxx values(1,2,3,4,5)我还在。");
+//		sqlFilter((++i)+"你好，delete from xxx我还在。");
+//		sqlFilter((++i)+"a.audit_result asc,case when 1 like case when length(database())=6 then 1 else exp(11111111111111111) end then 1 else 1/0 end");
+//	}
+	
 }

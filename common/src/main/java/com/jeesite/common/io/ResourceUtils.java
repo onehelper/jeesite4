@@ -10,6 +10,7 @@ import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
 
 import com.jeesite.common.lang.ExceptionUtils;
 
@@ -20,7 +21,12 @@ import com.jeesite.common.lang.ExceptionUtils;
  */
 public class ResourceUtils extends org.springframework.util.ResourceUtils {
 	
-	private static ResourceLoader resourceLoader = new DefaultResourceLoader();
+	private static ResourceLoader resourceLoader;
+	private static ResourcePatternResolver resourceResolver;
+	static{
+		resourceLoader = new DefaultResourceLoader();
+		resourceResolver = new PathMatchingResourcePatternResolver(resourceLoader);
+	}
 	
 	/**
 	 * 获取资源加载器（可读取jar内的文件）
@@ -61,14 +67,10 @@ public class ResourceUtils extends org.springframework.util.ResourceUtils {
 	 * @author ThinkGem
 	 */
 	public static String getResourceFileContent(String location){
-		InputStream is = null;
-		try{
-			is = ResourceUtils.getResourceFileStream(location);
+		try(InputStream is = ResourceUtils.getResourceFileStream(location)){
 			return IOUtils.toString(is, "UTF-8");
 		}catch (IOException e) {
 			throw ExceptionUtils.unchecked(e);
-		}finally{
-			IOUtils.closeQuietly(is);
 		}
 	}
 	
@@ -79,11 +81,7 @@ public class ResourceUtils extends org.springframework.util.ResourceUtils {
 	 */
 	public static Resource[] getResources(String locationPattern){
 		try {
-			Resource[] resources = new PathMatchingResourcePatternResolver()
-					.getResources(locationPattern);
-//			System.out.println("===========\n===========");
-//			System.out.println(locationPattern + "   :   " + resources.length);
-//			System.out.println("===========\n===========");
+			Resource[] resources = resourceResolver.getResources(locationPattern);
 			return resources;
 		} catch (IOException e) {
 			throw ExceptionUtils.unchecked(e);

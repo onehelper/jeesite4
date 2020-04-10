@@ -9,8 +9,6 @@ import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.commons.lang3.StringEscapeUtils;
-
 import com.jeesite.common.codec.EncodeUtils;
 import com.jeesite.common.collect.ListUtils;
 
@@ -87,6 +85,14 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
     	}
     	return false;
     }
+    
+    /**
+     * 去除左右空格（包含中文空格）
+     * @param str
+     */
+    public static String trim2(final String str) {
+        return str == null ? null : str.replaceAll("^[\\s|　| ]*|[\\s|　| ]*$", "");
+    }
 	
 	/**
 	 * 替换掉HTML标签方法
@@ -140,7 +146,7 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
 		try {
 			StringBuilder sb = new StringBuilder();
 			int currentLength = 0;
-			for (char c : stripHtml(StringEscapeUtils.unescapeHtml4(str)).toCharArray()) {
+			for (char c : stripHtml(EncodeUtils.decodeHtml(str)).toCharArray()) {
 				currentLength += String.valueOf(c).getBytes("GBK").length;
 				if (currentLength <= length - 3) {
 					sb.append(c);
@@ -250,16 +256,14 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
         if (s == null) {
             return null;
         }
-
         s = s.toLowerCase();
-
         StringBuilder sb = new StringBuilder(s.length());
         boolean upperCase = false;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
 
             if (c == SEPARATOR) {
-                upperCase = true;
+                upperCase = i != 1; // 不允许第二个字符是大写
             } else if (upperCase) {
                 sb.append(Character.toUpperCase(c));
                 upperCase = false;
@@ -267,7 +271,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
                 sb.append(c);
             }
         }
-
         return sb.toString();
     }
 
@@ -297,18 +300,14 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
         if (s == null) {
             return null;
         }
-
         StringBuilder sb = new StringBuilder();
         boolean upperCase = false;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-
             boolean nextUpperCase = true;
-
             if (i < (s.length() - 1)) {
                 nextUpperCase = Character.isUpperCase(s.charAt(i + 1));
             }
-
             if ((i > 0) && Character.isUpperCase(c)) {
                 if (!upperCase || !nextUpperCase) {
                     sb.append(SEPARATOR);
@@ -317,10 +316,8 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
             } else {
                 upperCase = false;
             }
-
             sb.append(Character.toLowerCase(c));
         }
-
         return sb.toString();
     }
     

@@ -3,6 +3,7 @@
  */
 package com.jeesite.common.utils.excel;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -15,12 +16,14 @@ import java.util.Comparator;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.poi.hssf.usermodel.HSSFDateUtil;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
 import org.apache.poi.ss.formula.eval.ErrorEval;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.CellValue;
 import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
@@ -34,6 +37,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.jeesite.common.callback.MethodCallback;
 import com.jeesite.common.collect.ListUtils;
+import com.jeesite.common.collect.SetUtils;
 import com.jeesite.common.lang.DateUtils;
 import com.jeesite.common.lang.ObjectUtils;
 import com.jeesite.common.lang.StringUtils;
@@ -45,9 +49,9 @@ import com.jeesite.common.utils.excel.annotation.ExcelFields;
 /**
  * 导入Excel文件（支持“XLS”和“XLSX”格式）
  * @author ThinkGem
- * @version 2014-8-19
+ * @version 2020-2-19
  */
-public class ExcelImport {
+public class ExcelImport implements Closeable {
 	
 	private static Logger log = LoggerFactory.getLogger(ExcelImport.class);
 			
@@ -65,6 +69,11 @@ public class ExcelImport {
 	 * 标题行数
 	 */
 	private int headerNum;
+	
+	/**
+	 * 用于清理缓存
+	 */
+	private Set<Class<?>> fieldTypes = SetUtils.newHashSet();
 	
 	/**
 	 * 构造函数
@@ -194,6 +203,9 @@ public class ExcelImport {
 	 */
 	public Row getRow(int rownum){
 		Row row = this.sheet.getRow(rownum);
+		if (row == null){
+			return null;
+		}
 		// 验证是否是空行，如果空行返回null
 		short cellNum = 0;
 		short emptyNum = 0;
@@ -251,43 +263,47 @@ public class ExcelImport {
 		try{
 			Cell cell = row.getCell(column);
 			if (cell != null){
-				if (cell.getCellType() == Cell.CELL_TYPE_NUMERIC){
+				if (cell.getCellTypeEnum() == CellType.NUMERIC){
 					val = cell.getNumericCellValue();
 					if (HSSFDateUtil.isCellDateFormatted(cell)) {
-				        val = DateUtil.getJavaDate((Double)val); // POI Excel 日期格式转换
-				    }else{
-				    	val = new DecimalFormat("0").format(val);
-				    }
-				}else if (cell.getCellType() == Cell.CELL_TYPE_STRING){
+						val = DateUtil.getJavaDate((Double) val); // POI Excel 日期格式转换
+					}else{
+						if ((Double) val % 1 > 0){
+							val = new DecimalFormat("0.00").format(val);
+						}else{
+							val = new DecimalFormat("0").format(val);
+						}
+					}
+				}else if (cell.getCellTypeEnum() == CellType.STRING) {
 					val = cell.getStringCellValue();
-				}else if (cell.getCellType() == Cell.CELL_TYPE_FORMULA){
+				}else if (cell.getCellTypeEnum() == CellType.FORMULA){
 					try {
 						val = cell.getStringCellValue();
 					} catch (Exception e) {
 						FormulaEvaluator evaluator = cell.getSheet().getWorkbook()
 								.getCreationHelper().createFormulaEvaluator();
-						evaluator.evaluateFormulaCell(cell);
+						evaluator.evaluateFormulaCellEnum(cell);
 						CellValue cellValue = evaluator.evaluate(cell);
-						switch (cellValue.getCellType()) {
-						case Cell.CELL_TYPE_NUMERIC:
+						switch (cellValue.getCellTypeEnum()) {
+						case NUMERIC:
 							val = cellValue.getNumberValue();
 							break;
-						case Cell.CELL_TYPE_STRING:
+						case STRING:
 							val = cellValue.getStringValue();
 							break;
-						case Cell.CELL_TYPE_BOOLEAN:
+						case BOOLEAN:
 							val = cellValue.getBooleanValue();
 							break;
-						case Cell.CELL_TYPE_ERROR:
+						case ERROR:
 							val = ErrorEval.getText(cellValue.getErrorValue());
 							break;
 						default:
 							val = cell.getCellFormula();
 						}
 					}
-				}else if (cell.getCellType() == Cell.CELL_TYPE_BOOLEAN){
+				}else if (cell.getCellTypeEnum() == CellType.BOOLEAN){
 					val = cell.getBooleanCellValue();
-				}else if (cell.getCellType() == Cell.CELL_TYPE_ERROR){
+				}else if (cell.getCellTypeEnum() == CellType.ERROR){
 					val = cell.getErrorCellValue();
 				}
 			}
@@ -409,33 +425,46 @@ public class ExcelImport {
 					}
 					//log.debug("Import value type: ["+i+","+column+"] " + valType);
 					try {
-						if (valType == String.class){
-							String s = String.valueOf(val.toString());
-							if(StringUtils.endsWith(s, ".0")){
-								val = StringUtils.substringBefore(s, ".0");
-							}else{
-								val = String.valueOf(val.toString());
-							}
-						}else if (valType == Integer.class){
-							val = Double.valueOf(val.toString()).intValue();
-						}else if (valType == Long.class){
-							val = Double.valueOf(val.toString()).longValue();
-						}else if (valType == Double.class){
-							val = Double.valueOf(val.toString());
-						}else if (valType == Float.class){
-							val = Float.valueOf(val.toString());
-						}else if (valType == Date.class){
-							if (val instanceof String){
-								val = DateUtils.parseDate(val);
-							}else if (val instanceof Double){
-								val = DateUtil.getJavaDate((Double)val); // POI Excel 日期格式转换
+						if (StringUtils.isNotBlank(ef.attrName())){
+							if (ef.fieldType() != Class.class){
+								fieldTypes.add(ef.fieldType()); // 先存起来，方便完成后清理缓存
+								val = ef.fieldType().getMethod("getValue", String.class).invoke(null, val);
 							}
 						}else{
-							if (ef.fieldType() != Class.class){
-								val = ef.fieldType().getMethod("getValue", String.class).invoke(null, val.toString());
-							}else{
-								val = Class.forName(this.getClass().getName().replaceAll(this.getClass().getSimpleName(), 
-										"fieldtype."+valType.getSimpleName()+"Type")).getMethod("getValue", String.class).invoke(null, val.toString());
+							if (val != null){
+								if (valType == String.class){
+									String s = String.valueOf(val.toString());
+									if(StringUtils.endsWith(s, ".0")){
+										val = StringUtils.substringBefore(s, ".0");
+									}else{
+										val = String.valueOf(val.toString());
+									}
+								}else if (valType == Integer.class){
+									val = Double.valueOf(val.toString()).intValue();
+								}else if (valType == Long.class){
+									val = Double.valueOf(val.toString()).longValue();
+								}else if (valType == Double.class){
+									val = Double.valueOf(val.toString());
+								}else if (valType == Float.class){
+									val = Float.valueOf(val.toString());
+								}else if (valType == Date.class){
+									if (val instanceof String){
+										val = DateUtils.parseDate(val);
+									}else if (val instanceof Double){
+										val = DateUtil.getJavaDate((Double)val); // POI Excel 日期格式转换
+									}
+								}else{
+									if (ef.fieldType() != Class.class){
+										fieldTypes.add(ef.fieldType()); // 先存起来，方便完成后清理缓存
+										val = ef.fieldType().getMethod("getValue", String.class).invoke(null, val.toString());
+									}else{
+										// 如果没有指定 fieldType，切自行根据类型查找相应的转换类（com.jeesite.common.utils.excel.fieldtype.值的类名+Type）
+										Class<?> fieldType2 = Class.forName(this.getClass().getName().replaceAll(this.getClass().getSimpleName(), 
+												"fieldtype."+valType.getSimpleName()+"Type"));
+										fieldTypes.add(fieldType2); // 先存起来，方便完成后清理缓存
+										val = fieldType2.getMethod("getValue", String.class).invoke(null, val.toString());
+									}
+								}
 							}
 						}
 					} catch (Exception ex) {
@@ -445,14 +474,18 @@ public class ExcelImport {
 						exceptionCallback.execute(ex, i, column);
 					}
 					// set entity value
-					if (os[1] instanceof Field){
-						ReflectUtils.invokeSetter(e, ((Field)os[1]).getName(), val);
-					}else if (os[1] instanceof Method){
-						String mthodName = ((Method)os[1]).getName();
-						if ("get".equals(mthodName.substring(0, 3))){
-							mthodName = "set"+StringUtils.substringAfter(mthodName, "get");
+					if (StringUtils.isNotBlank(ef.attrName())){
+						ReflectUtils.invokeSetter(e, ef.attrName(), val);
+					}else{
+						if (os[1] instanceof Field){
+							ReflectUtils.invokeSetter(e, ((Field)os[1]).getName(), val);
+						}else if (os[1] instanceof Method){
+							String mthodName = ((Method)os[1]).getName();
+							if ("get".equals(mthodName.substring(0, 3))){
+								mthodName = "set"+StringUtils.substringAfter(mthodName, "get");
+							}
+							ReflectUtils.invokeMethod(e, mthodName, new Class[] {valType}, new Object[] {val});
 						}
-						ReflectUtils.invokeMethod(e, mthodName, new Class[] {valType}, new Object[] {val});
 					}
 				}
 				sb.append(val+", ");
@@ -461,6 +494,19 @@ public class ExcelImport {
 			log.debug("Read success: ["+i+"] "+sb.toString());
 		}
 		return dataList;
+	}
+	
+	@Override
+	public void close() {
+		Iterator<Class<?>> it = fieldTypes.iterator();
+		while(it.hasNext()){
+			Class<?> clazz = it.next();
+			try {
+				clazz.getMethod("clearCache").invoke(null);
+			} catch (Exception e) {
+				// 报错忽略，有可能没实现此方法
+			}
+		}
 	}
 
 //	/**
@@ -479,7 +525,7 @@ public class ExcelImport {
 //				Object val = ei.getCellValue(row, j);
 //				System.out.print(val+", ");
 //			}
-//			System.out.print("\n");
+//			System.out.println();
 //		}
 //		
 //	}

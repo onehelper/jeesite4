@@ -26,12 +26,6 @@ public class CodeStatistic {
 		System.out.println("Path: " + path);
 		ArrayList<File> al = getFile(new File(path));
 		for (File f : al) {
-			if (!(f.getPath().contains("4.0\\jeesite\\")
-					|| f.getPath().contains("\\devtools\\")
-					|| f.getPath().contains("\\framework\\"))
-					|| f.getPath().contains("\\target\\")){
-				continue;
-			}
 			if (f.getName().matches(".*\\.java$") 
 					|| f.getName().matches(".*\\.html$")
 					|| f.getName().matches(".*\\.js$")){
@@ -74,10 +68,12 @@ public class CodeStatistic {
 	 * @param f
 	 */
 	private static void count(File f) {
+		FileReader fr = null;
 		BufferedReader br = null;
 		boolean flag = false;
 		try {
-			br = new BufferedReader(new FileReader(f));
+			fr = new FileReader(f);
+			br = new BufferedReader(fr);
 			String line = "";
 			while ((line = br.readLine()) != null) {
 				line = line.trim(); // 除去注释前的空格
@@ -109,6 +105,14 @@ public class CodeStatistic {
 				try {
 					br.close();
 					br = null;
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+			if (fr != null){
+				try {
+					fr.close();
+					fr = null;
 				} catch (IOException e) {
 					e.printStackTrace();
 				}

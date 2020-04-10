@@ -7,16 +7,15 @@ rem  */
 echo.
 echo [信息] 清理Eclipse工程文件。
 echo.
-pause
-echo.
 
 %~d0
 cd %~dp0
 
-cd ../
+cd ..
 call mvn -Declipse.workspace=%cd% eclipse:clean eclipse:eclipse
 
 del .classpath
 del .project
 
+cd bin
 pause

@@ -3,7 +3,7 @@
 	<div class="box box-main">
 		<div class="box-header">
 			<div class="box-title">
-				<i class="fa fa-bug"></i> 访问日志查询
+				<i class="fa fa-bug"></i> 访问日志
 			</div>
 			<div class="box-tools pull-right">
 				<a href="#" class="btn btn-default" id="btnSearch" title="查询"><i class="fa fa-filter"></i> 查询</a>
@@ -33,7 +33,7 @@
 				<div class="form-group">
 					<label class="control-label">操作用户：</label>
 					<div class="control-inline width-120">
-						<#form:listselect id="userSelect" title="用户" path="createBy"
+						<#form:listselect id="userSelect" title="用户选择" path="createBy"
 							url="${ctx}/sys/user/userSelect?userType=" allowClear="false" 
 							checkbox="false" itemCode="userCode" itemName="userName"/>
 					</div>
@@ -61,10 +61,10 @@
 					<label class="control-label">操作时间：</label>
 					<div class="control-inline">
 						<#form:input path="createDate_gte" readonly="readonly" maxlength="20" class="form-control Wdate-date"
-							dataFormat="date" onclick="WdatePicker({dateFmt:'yyyy-MM-dd',isShowClear:false,onpicked:function(){createDate_lte.click()}});"/>
+							dataFormat="date" onclick="WdatePicker({dateFmt:'yyyy-MM-dd',isShowClear:true,onpicked:function(){createDate_lte.click()}});"/>
 						&nbsp;--&nbsp;
 						<#form:input path="createDate_lte" readonly="readonly" maxlength="20" class="form-control Wdate-date"
-							dataFormat="date" onclick="WdatePicker({dateFmt:'yyyy-MM-dd',isShowClear:false});"/>
+							dataFormat="date" onclick="WdatePicker({dateFmt:'yyyy-MM-dd',isShowClear:true});"/>
 					</div>
 				</div>
 				<div class="form-group">

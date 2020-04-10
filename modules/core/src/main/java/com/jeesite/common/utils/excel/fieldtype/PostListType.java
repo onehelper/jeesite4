@@ -5,6 +5,8 @@ package com.jeesite.common.utils.excel.fieldtype;
 
 import java.util.List;
 
+import org.springframework.core.NamedThreadLocal;
+
 import com.jeesite.common.collect.ListUtils;
 import com.jeesite.common.lang.StringUtils;
 import com.jeesite.common.utils.SpringUtils;
@@ -14,26 +16,26 @@ import com.jeesite.modules.sys.service.PostService;
 /**
  * 字段类型转换
  * @author ThinkGem
- * @version 2015-03-24
+ * @version 2018-08-11
  * @example fieldType = PostListType.class
  */
 public class PostListType {
 
 	private static PostService postService = SpringUtils.getBean(PostService.class);
-	private static ThreadLocal<List<Post>> cache = new ThreadLocal<>();
+	private static ThreadLocal<List<Post>> cache = new NamedThreadLocal<>("PostListType");
 
 	/**
 	 * 获取对象值（导入）
 	 */
 	public static Object getValue(String val) {
 		List<Post> postList = ListUtils.newArrayList();
-		List<Post> allPostList = cache.get();
-		if (allPostList == null){
-			allPostList = postService.findList(new Post());
-			cache.set(allPostList); // 不知道会不会引起内存泄露，先这样用着
+		List<Post> cacheList = cache.get();
+		if (cacheList == null){
+			cacheList = postService.findList(new Post());
+			cache.set(cacheList);
 		}
 		for (String s : StringUtils.split(val, ",")) {
-			for (Post e : allPostList) {
+			for (Post e : cacheList) {
 				if (StringUtils.trimToEmpty(s).equals(e.getPostName())) {
 					postList.add(e);
 				}
@@ -52,5 +54,12 @@ public class PostListType {
 			return ListUtils.extractToString(postList, "postName", ", ");
 		}
 		return "";
+	}
+	
+	/**
+	 * 清理缓存
+	 */
+	public static void clearCache(){
+		cache.remove();
 	}
 }

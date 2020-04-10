@@ -14,13 +14,12 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.math.NumberUtils;
 import org.nustaq.serialization.FSTConfiguration;
 import org.springframework.beans.BeanUtils;
-
-import com.jeesite.common.io.IOUtils;
+import org.springframework.core.NamedThreadLocal;
 
 /**
  * 对象操作工具类, 继承org.apache.commons.lang3.ObjectUtils类
  * @author ThinkGem
- * @version 2014-6-29
+ * @version 2018-08-11
  */
 public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 
@@ -117,9 +116,13 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 		if (source == null){
 			return null;
 		}
-    	Object target = BeanUtils.instantiate(source.getClass());
-	    BeanUtils.copyProperties(source, target, ignoreProperties);
-	    return target;
+		try {
+			Object target = source.getClass().newInstance();
+			BeanUtils.copyProperties(source, target, ignoreProperties);
+			return target;
+		} catch (InstantiationException | IllegalAccessException e) {
+			throw ExceptionUtils.unchecked(e);
+		}
 	}
 
 	/**
@@ -161,18 +164,12 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 		}
 		long beginTime = System.currentTimeMillis();
 		byte[] bytes = null;
-		ObjectOutputStream oos = null;
-		ByteArrayOutputStream baos = null;
-		try {
-			baos = new ByteArrayOutputStream();
-			oos = new ObjectOutputStream(baos);
+		try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				ObjectOutputStream oos = new ObjectOutputStream(baos);) {
 			oos.writeObject(object);
 			bytes = baos.toByteArray();
 		} catch (Exception e) {
 			e.printStackTrace();
-		} finally {
-			IOUtils.closeQuietly(oos);
-			IOUtils.closeQuietly(baos);
 		}
 		long totalTime = System.currentTimeMillis() - beginTime;
 		if (totalTime > 3000){
@@ -192,19 +189,13 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 		}
 		long beginTime = System.currentTimeMillis();
 		Object object = null;
-		ByteArrayInputStream bais = null;
-		ObjectInputStream ois = null;
-		try {
-			if (bytes.length > 0) {
-				bais = new ByteArrayInputStream(bytes);
-				ois = new ObjectInputStream(bais);
+		if (bytes.length > 0) {
+			try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+					ObjectInputStream ois = new ObjectInputStream(bais);) {
 				object = ois.readObject();
+			} catch (Exception e) {
+				e.printStackTrace();
 			}
-		} catch (Exception e) {
-			e.printStackTrace();
-		} finally {
-			IOUtils.closeQuietly(ois);
-			IOUtils.closeQuietly(bais);
 		}
 		long totalTime = System.currentTimeMillis() - beginTime;
 		if (totalTime > 3000){
@@ -212,73 +203,14 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 		}
 		return object;
 	}
-
-//	// Kryo不是线程安全的，所以要建立一个线程变量，每一个线程实例化一次
-//	public static final ThreadLocal<Kryo> kryos = new ThreadLocal<Kryo>() {
-//		@Override
-//		protected Kryo initialValue() {
-//			Kryo kryo = new Kryo();
-//			// 设置false关闭注册行为， Kryo支持对注册行为，如kryo.register(SomeClazz.class);
-//			// 这会赋予该Class一个从0开始的编号，但Kryo使用注册行为最大的问题在于，
-//			// 其不保证同一个Class每一次注册的号码想用，这与注册的顺序有关，也就意味着在不同的机器、
-//			// 同一个机器重启前后都有可能拥有不同的编号，这会导致序列化产生问题，所以在分布式项目中，一般关闭注册行为。
-//			kryo.setRegistrationRequired(false);
-//			// 支持循环引用
-//			kryo.setReferences(true);
-//			return kryo;
-//		};
-//	};
-//
-//	/**
-//	 * Kryo序列化对象
-//	 * @param object
-//	 * @return
-//	 */
-//	public static byte[] serializeKryo(Object object) {
-//		byte[] bytes = null;
-//		Output output = null;
-//		try {
-//			if (object != null) {
-//				output = new Output(1024, -1);
-//				kryos.get().writeClassAndObject(output, object);
-//				bytes = output.toBytes();
-//			}
-//		} catch (Exception e) {
-//			e.printStackTrace();
-//		} finally {
-//			if (output != null) {
-//				output.close();
-//			}
-//		}
-//		return bytes;
-//	}
-//
-//	/**
-//	 * Kryo反序列化对象
-//	 * @param bytes
-//	 * @return
-//	 */
-//	public static Object unserializeKryo(byte[] bytes) {
-//		Object object = null;
-//		Input input = null;
-//		try {
-//			if (bytes != null && bytes.length > 0) {
-//				input = new Input(bytes, 0, bytes.length);
-//				object = kryos.get().readClassAndObject(input);
-//			}
-//		} catch (Exception e) {
-//			e.printStackTrace();
-//		} finally {
-//			if (input != null) {
-//				input.close();
-//			}
-//		}
-//		return object;
-//	}
 	
 	// FST序列化配置对象
-	private static FSTConfiguration fst = FSTConfiguration.createDefaultConfiguration();
-	
+	private static ThreadLocal<FSTConfiguration> fst = new NamedThreadLocal<FSTConfiguration>("FSTConfiguration") {
+		public FSTConfiguration initialValue() {
+			return FSTConfiguration.createDefaultConfiguration();
+		}
+	};
+
 	/**
 	 * FST 序列化对象
 	 * @param object
@@ -289,7 +221,7 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 			return null;
 		}
 		long beginTime = System.currentTimeMillis();
-		byte[] bytes = fst.asByteArray(object);
+		byte[] bytes = fst.get().asByteArray(object);
 		long totalTime = System.currentTimeMillis() - beginTime;
 		if (totalTime > 3000){
 			System.out.println("Fst serialize time: " + TimeUtils.formatDateAgo(totalTime));
@@ -307,7 +239,7 @@ public class ObjectUtils extends org.apache.commons.lang3.ObjectUtils {
 			return null;
 		}
 		long beginTime = System.currentTimeMillis();
-		Object object = fst.asObject(bytes);
+		Object object = fst.get().asObject(bytes);
 		long totalTime = System.currentTimeMillis() - beginTime;
 		if (totalTime > 3000){
 			System.out.println("Fst unserialize time: " + TimeUtils.formatDateAgo(totalTime));

@@ -29,7 +29,7 @@ import com.jeesite.modules.test.service.TestTreeService;
 /**
  * 测试树表Controller
  * @author ThinkGem
- * @version 2018-02-07
+ * @version 2018-04-22
  */
 @Controller
 @RequestMapping(value = "${adminPath}/test/testTree")
@@ -67,9 +67,6 @@ public class TestTreeController extends BaseController {
 			testTree.setParentCode(TestTree.ROOT_CODE);
 		}
 		if (StringUtils.isNotBlank(testTree.getTreeName())){
-			testTree.setParentCode(null);
-		}
-		if (StringUtils.isNotBlank(testTree.getStatus())){
 			testTree.setParentCode(null);
 		}
 		if (StringUtils.isNotBlank(testTree.getRemarks())){
@@ -128,7 +125,7 @@ public class TestTreeController extends BaseController {
 	@ResponseBody
 	public String save(@Validated TestTree testTree) {
 		testTreeService.save(testTree);
-		return renderResult(Global.TRUE, "保存数据成功！");
+		return renderResult(Global.TRUE, text("保存数据成功！"));
 	}
 	
 	/**
@@ -143,11 +140,11 @@ public class TestTreeController extends BaseController {
 		where.setParentCodes("," + testTree.getId() + ",");
 		long count = testTreeService.findCount(where);
 		if (count > 0) {
-			return renderResult(Global.FALSE, "该数据包含未停用的子数据！");
+			return renderResult(Global.FALSE, text("该数据包含未停用的子数据！"));
 		}
 		testTree.setStatus(TestTree.STATUS_DISABLE);
 		testTreeService.updateStatus(testTree);
-		return renderResult(Global.TRUE, "停用数据成功");
+		return renderResult(Global.TRUE, text("停用数据成功"));
 	}
 	
 	/**
@@ -159,7 +156,7 @@ public class TestTreeController extends BaseController {
 	public String enable(TestTree testTree) {
 		testTree.setStatus(TestTree.STATUS_NORMAL);
 		testTreeService.updateStatus(testTree);
-		return renderResult(Global.TRUE, "启用数据成功");
+		return renderResult(Global.TRUE, text("启用数据成功"));
 	}
 	
 	/**
@@ -170,7 +167,7 @@ public class TestTreeController extends BaseController {
 	@ResponseBody
 	public String delete(TestTree testTree) {
 		testTreeService.delete(testTree);
-		return renderResult(Global.TRUE, "删除数据成功！");
+		return renderResult(Global.TRUE, text("删除数据成功！"));
 	}
 	
 	/**
